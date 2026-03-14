@@ -1,0 +1,92 @@
+# HTTP/HTTPS 代理端口（方便调试）
+port: 7890
+socks-port: 7891
+# 允许局域网其他设备连接（抓包手机时可开启）
+allow-lan: false
+# 运行模式：rule（规则）
+mode: rule
+# 日志级别（调试时可改为 debug）
+log-level: info
+# 外部控制器（用于 Web UI 管理）
+external-controller: 127.0.0.1:9090
+
+# ---------- 代理定义：指向 Reqable ----------
+proxies:
+  - name: "Reqable"
+    type: http                    # HTTP 类型同时支持 HTTP/HTTPS 代理
+    server: 127.0.0.1
+    port: 9000                    # 必须与 Reqable 监听的端口一致
+    udp: false                    # HTTP 代理不支持 UDP，如需要可另配 SOCKS5
+
+# ---------- 代理组：将所有流量导向 Reqable ----------
+proxy-groups:
+  - name: "PROXY"
+    type: select
+    proxies:
+      - "Reqable"
+
+# ---------- 规则：核心是防回环 + 全量转发 ----------
+rules:
+  # ===== 防回环规则（必须放在最前）=====
+  # 1. 根据进程名放行 Reqable 自身流量（最精确）
+  - PROCESS-NAME,Reqable.exe,DIRECT
+  # 2. 放行本地回环 IP 范围（双重保障）
+  - IP-CIDR,127.0.0.1/8,DIRECT
+  # 3. 放行发向 Reqable 代理端口的流量（三重保障）
+  - DST-PORT,9000,DIRECT
+
+  # ===== 放行局域网流量（避免不必要的代理）=====
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT
+  - IP-CIDR,172.16.0.0/12,DIRECT
+  - IP-CIDR,100.64.0.0/10,DIRECT    # CGNAT 保留地址
+
+  # ===== 最终规则：所有其他流量走 Reqable 代理 =====
+  - MATCH,PROXY
+
+# ---------- TUN 模式配置（实现全局强制代理）----------
+tun:
+  enable: true
+  stack: mixed                    # 推荐 mixed，兼容性最好[citation:4]
+  strict-route: true               # 强制所有流量进入 TUN，防止 DNS 泄漏[citation:4]
+  auto-route: true                 # 自动设置路由（Windows 需要管理员权限）
+  auto-redirect: true              # 自动重定向 TCP 连接（Linux 需要）
+  dns-hijack:
+    - any:53                       # 劫持所有 DNS 请求
+  mtu: 1500                        # 大多数网络环境的理想值[citation:4]
+  disable-icmp-forwarding: true     # 禁用 ICMP 转发，避免 CPU 高占用[citation:4]
+
+# ---------- DNS 配置（关键：采用 fake-ip 模式）----------
+dns:
+  enable: true
+  listen: 0.0.0.0:53
+  ipv6: false                      # 如需抓包 IPv6 可改为 true
+  enhanced-mode: fake-ip            # fake-ip 模式避免 DNS 污染[citation:4]
+  fake-ip-range: 198.18.0.1/16      # 标准 fake-ip 地址池
+  fake-ip-filter:                   # 不需要 fake-ip 的域名例外
+    - geosite:connectivity-check    # 网络连通性检测
+    - geosite:private                # 私有域名（如 .local）
+    - geosite:cn                     # 国内域名（可选）
+    - +.lan
+    - +.local
+    - +.stun.*.*
+    - +.stun.*.*.*
+    - "*.n.n.srv.nintendo.net"
+    - +.stun.playstation.net
+    - xbox.*.*.microsoft.com
+    - "*.*.xboxlive.com"
+    - +.msftncsi.com
+    - +.msftconnecttest.com
+    - WORKGROUP
+  
+  # 上游 DNS 服务器
+  nameserver:
+    - system                        # 使用系统 DNS（性能好、兼容内网）[citation:4]
+  default-nameserver:
+    - system                        # 默认 DNS 也使用系统
+  proxy-server-nameserver:
+    - system                        # 代理服务器解析用系统 DNS
+
+# ---------- 实验性功能（可选）----------
+experimental:
+  ignore-resolve-fail: true         # 忽略解析失败，避免卡顿
